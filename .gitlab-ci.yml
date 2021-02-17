@@ -79,6 +79,5 @@ release:
     - master
 
 include:
-  - local: "/live_image/.gitlab-ci.yaml"
   - template: Security/SAST.gitlab-ci.yml
 #  - template: Security/Secret-Detection.gitlab-ci.yml
