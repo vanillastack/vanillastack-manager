@@ -1,0 +1,84 @@
+---
+image: "harbor.vanillastack.io/vanillastack/vanilla-ubuntu-base:20201211"
+services:
+  - docker:18.09.7-dind
+variables:
+  GIT_SUBMODULE_STRATEGY: recursive
+  DOCKER_HOST: tcp://localhost:2375
+  SAST_EXCLUDED_PATHS: "docs"
+  SECRET_DETECTION_EXCLUDED_PATHS: "docs"
+  SEARCH_MAX_DEPTH: 50
+
+stages:
+  - gen_version
+  - test
+  - build_docker_image_dev
+  - build_docker_image_testing
+  - release
+  - build_docker_image_prod
+  - build_liveimage
+
+gen_version:
+  stage: gen_version
+  interruptible: false
+  script:
+    - echo "VERSION=$(date +'%Y%m')-$CI_COMMIT_SHORT_SHA" > vars.env
+    - cat vars.env
+  artifacts:
+    reports:
+      dotenv: vars.env
+
+build_docker_image_dev:
+  only:
+    refs:
+      - backend_testing
+  stage: build_docker_image_dev
+  interruptible: true
+  script:
+    - docker login -u 'robot$build-backend-gitlab.cloudical.net' -p "$HARBOR_ROBOT_KEY_BUILD_BACKEND" harbor.cloudical.net/vanillastack
+    - docker build -f docker/prod/manager/alpine/Dockerfile --build-arg VERSION=$VERSION -t harbor.cloudical.net/vanillastack/manager:dev-$VERSION -t harbor.cloudical.net/vanillastack/manager:dev-latest .
+    - docker push harbor.cloudical.net/vanillastack/manager:dev-$VERSION
+    - docker push harbor.cloudical.net/vanillastack/manager:dev-latest
+
+build_docker_image_testing:
+  only:
+    refs:
+      - testing
+  stage: build_docker_image_testing
+  interruptible: true
+  allow_failure: true
+  script:
+    - docker login -u 'robot$build-backend-gitlab.cloudical.net' -p "$HARBOR_ROBOT_KEY_BUILD_BACKEND" harbor.cloudical.net/vanillastack
+    - docker build -f docker/prod/manager/alpine/Dockerfile --build-arg VERSION=$VERSION -t harbor.cloudical.net/vanillastack/manager:testing-$VERSION -t harbor.cloudical.net/vanillastack/manager:testing-latest .
+    - docker push harbor.cloudical.net/vanillastack/manager:testing-$VERSION
+    - docker push harbor.cloudical.net/vanillastack/manager:testing-latest
+
+build_docker_image_prod:
+  only:
+    refs:
+      - master
+  stage: build_docker_image_prod
+  interruptible: false
+  script:
+    - docker login -u 'robot$build-backend-gitlab.cloudical.net' -p "$HARBOR_ROBOT_KEY_BUILD_BACKEND" harbor.cloudical.net/vanillastack
+    - export RELEASE=$(git tag|grep "^v"|sort -h|tail -1)
+    - docker build -f docker/prod/manager/alpine/Dockerfile --build-arg VERSION=$RELEASE -t harbor.cloudical.net/vanillastack/manager:$RELEASE -t harbor.cloudical.net/vanillastack/manager:latest .
+    - docker push harbor.cloudical.net/vanillastack/manager:$RELEASE
+    - docker push harbor.cloudical.net/vanillastack/manager:latest
+
+release:
+  image: node:12-buster-slim
+  stage: release
+  before_script:
+    - apt-get update && apt-get install -y --no-install-recommends git-core ca-certificates
+    - npm install -g semantic-release @semantic-release/gitlab
+  script:
+    - find .
+    - semantic-release
+  only:
+    - master
+
+include:
+  - local: "/live_image/.gitlab-ci.yaml"
+  - template: Security/SAST.gitlab-ci.yml
+#  - template: Security/Secret-Detection.gitlab-ci.yml
